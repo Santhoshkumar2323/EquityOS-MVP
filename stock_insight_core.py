@@ -36,7 +36,7 @@ else:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         gemini_model = genai.GenerativeModel('gemini-2.5-flash-lite')
-        print("AI Configuration: Gemini 1.5 Flash model initialized.")
+        print("AI Configuration: Gemini-2.5-flash-lite initialized.")
     except Exception as e:
         print(f"ERROR: Gemini API initialization failed: {e}. AI features will be unavailable.")
         gemini_model = None
