@@ -10,6 +10,7 @@ from plotly.subplots import make_subplots
 import google.generativeai as genai
 import time
 from dotenv import load_dotenv
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -24,7 +25,8 @@ else:
         finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
         print("Finnhub Configuration: Finnhub client initialized.")
     except Exception as e:
-        print(f"ERROR: Finnhub client initialization failed: {e}. Finnhub features will be unavailable.")
+        print(
+            f"ERROR: Finnhub client initialization failed: {e}. Finnhub features will be unavailable.")
         finnhub_client = None
 
 
@@ -38,7 +40,8 @@ else:
         gemini_model = genai.GenerativeModel('gemini-2.5-flash-lite')
         print("AI Configuration: Gemini-2.5-flash-lite initialized.")
     except Exception as e:
-        print(f"ERROR: Gemini API initialization failed: {e}. AI features will be unavailable.")
+        print(
+            f"ERROR: Gemini API initialization failed: {e}. AI features will be unavailable.")
         gemini_model = None
 
 # Reddit credentials
@@ -62,13 +65,16 @@ if all([REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD
         # Verify read-only access by trying to access something simple
         # This helps catch credential issues early
         print(f"Reddit client read-only: {reddit_client.read_only}")
-        if not reddit_client.read_only: # If it's not read-only, it means it authenticated with username/password
-             print("Reddit Configuration: SUCCESS - PRAW client initialized (user authenticated).")
-        else: # If read-only is true, it means it's an unauthenticated script instance
-             print("Reddit Configuration: SUCCESS - PRAW client initialized (read-only script).")
+        if not reddit_client.read_only:  # If it's not read-only, it means it authenticated with username/password
+            print(
+                "Reddit Configuration: SUCCESS - PRAW client initialized (user authenticated).")
+        else:  # If read-only is true, it means it's an unauthenticated script instance
+            print(
+                "Reddit Configuration: SUCCESS - PRAW client initialized (read-only script).")
 
     except Exception as e:
-        print(f"Reddit Configuration: ERROR - PRAW client initialization failed: {e}")
+        print(
+            f"Reddit Configuration: ERROR - PRAW client initialization failed: {e}")
 else:
     print("Reddit Configuration: WARNING - Missing one or more Reddit credentials in .env file. Reddit features will be unavailable.")
 
@@ -76,23 +82,26 @@ else:
 # --- Data Fetching Functions ---
 
 def fetch_yfinance_data(ticker):
-    """Fetches historical data and company info from Yahoo Finance."""
+    """Fetches historical data and company info from Yahoo Finance bypassing firewall blocks."""
     print(f"Data Fetch (yfinance): Attempting to fetch data for {ticker}...")
     try:
-        stock = yf.Ticker(ticker)
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        })
+        stock = yf.Ticker(ticker, session=session)
         info = stock.info
-        hist = stock.history(period="1y", interval="1d") # 1 year daily data
-
+        hist = stock.history(period="1y", interval="1d")
         if hist.empty:
             print(f"Data Fetch (yfinance): No historical data found for {ticker}.")
             return None, None
-        
         print(f"Data Fetch (yfinance): Company info retrieved for {ticker}.")
         print(f"Data Fetch (yfinance): Fetched {len(hist)} rows of historical data.")
         return info, hist
     except Exception as e:
         print(f"Data Fetch (yfinance): Error fetching data for {ticker}: {e}")
         return None, None
+
 
 def fetch_finnhub_news(ticker, limit=250):
     """Fetches news headlines from Finnhub."""
@@ -101,15 +110,20 @@ def fetch_finnhub_news(ticker, limit=250):
         return []
     try:
         # Finnhub news API requires 'from' and 'to' dates
-        from_date = (pd.Timestamp.now() - pd.DateOffset(months=1)).strftime('%Y-%m-%d')
+        from_date = (pd.Timestamp.now() - pd.DateOffset(months=1)
+                     ).strftime('%Y-%m-%d')
         to_date = pd.Timestamp.now().strftime('%Y-%m-%d')
         news = finnhub_client.company_news(ticker, _from=from_date, to=to_date)
-        news_headlines = [article['headline'] for article in news if 'headline' in article]
-        print(f"Data Fetch (Finnhub): Fetched {len(news_headlines)} news articles.")
-        return news_headlines[:limit] # Limit to avoid excessive AI token usage
+        news_headlines = [article['headline']
+                          for article in news if 'headline' in article]
+        print(
+            f"Data Fetch (Finnhub): Fetched {len(news_headlines)} news articles.")
+        # Limit to avoid excessive AI token usage
+        return news_headlines[:limit]
     except Exception as e:
         print(f"Data Fetch (Finnhub): Error fetching news for {ticker}: {e}")
         return []
+
 
 def fetch_historical_financials(ticker):
     """Fetches historical financial statements and calculates ratios."""
@@ -130,28 +144,32 @@ def fetch_historical_financials(ticker):
                 year = date.year
                 if year not in metrics_data_by_year:
                     metrics_data_by_year[year] = {}
-                metrics_data_by_year[year][metric_item['concept']] = metric_item['value']
+                metrics_data_by_year[year][metric_item['concept']
+                                           ] = metric_item['value']
 
-        df_financials = pd.DataFrame.from_dict(metrics_data_by_year, orient='index')
+        df_financials = pd.DataFrame.from_dict(
+            metrics_data_by_year, orient='index')
         df_financials.index.name = 'Date'
         df_financials = df_financials.sort_index(ascending=True)
 
         ratios_df = pd.DataFrame(index=df_financials.index)
-        
+
         # Mapping Finnhub raw metric names to display names
         # Check for both 'MetricNameAnnual' and 'MetricName' from Finnhub's basic financials
         # Print concepts found for debugging
-        print(f"  Finnhub concepts found for {ticker}: {df_financials.columns.tolist()}")
+        print(
+            f"  Finnhub concepts found for {ticker}: {df_financials.columns.tolist()}")
 
         ratio_mapping = {
             'grossProfitMargin': 'Gross Profit Margin',
-            'ebitMargin': 'Operating Profit Margin', # EBIT Margin
+            'ebitMargin': 'Operating Profit Margin',  # EBIT Margin
             'netProfitMargin': 'Net Profit Margin',
             'roe': 'Return on Equity',
             'roa': 'Return on Assets',
             'currentRatio': 'Current Ratio',
             'quickRatio': 'Quick Ratio',
-            'eps': 'EPS Growth' # Added EPS growth for completeness, though it's usually calculated from historical EPS
+            # Added EPS growth for completeness, though it's usually calculated from historical EPS
+            'eps': 'EPS Growth'
         }
 
         for finnhub_metric, display_name in ratio_mapping.items():
@@ -162,18 +180,22 @@ def fetch_historical_financials(ticker):
                 ratios_df[display_name] = df_financials[finnhub_metric]
                 print(f"  Found '{finnhub_metric}' as '{display_name}'.")
             else:
-                print(f"  Warning: Metric '{finnhub_metric}' (or its annual version) not found for {ticker}.")
-        
+                print(
+                    f"  Warning: Metric '{finnhub_metric}' (or its annual version) not found for {ticker}.")
+
         if ratios_df.empty:
-            print(f"  No relevant financial ratios could be extracted for {ticker} from Finnhub for charting.")
+            print(
+                f"  No relevant financial ratios could be extracted for {ticker} from Finnhub for charting.")
             return pd.DataFrame()
 
         print("Calculated Historical Ratios (Annual):")
         print(ratios_df)
-        return ratios_df.tail(5) # Show last 5 years
+        return ratios_df.tail(5)  # Show last 5 years
     except Exception as e:
-        print(f"Finnhub: Error fetching or processing financial data for {ticker}: {e}")
+        print(
+            f"Finnhub: Error fetching or processing financial data for {ticker}: {e}")
         return pd.DataFrame()
+
 
 def fetch_reddit_market_pulse(ticker, limit_posts_per_subreddit=15, limit_comments_per_post=3):
     """Fetches relevant Reddit posts and comments for broader market sentiment."""
@@ -182,20 +204,23 @@ def fetch_reddit_market_pulse(ticker, limit_posts_per_subreddit=15, limit_commen
         print("Reddit Market Pulse: PRAW client not initialized or credentials missing. Skipping Reddit data fetch.")
         return []
 
-    subreddits = ['investing', 'stocks', 'wallstreetbets', 'stockmarket', 'finance', 'economy']
+    subreddits = ['investing', 'stocks', 'wallstreetbets',
+                  'stockmarket', 'finance', 'economy']
     reddit_content_for_ai = []
-    print(f"Reddit Market Pulse: Attempting to fetch market pulse from {len(subreddits)} subreddits...")
+    print(
+        f"Reddit Market Pulse: Attempting to fetch market pulse from {len(subreddits)} subreddits...")
 
     try:
         for subreddit_name in subreddits:
             subreddit = reddit_client.subreddit(subreddit_name)
-            print(f"Fetching top {limit_posts_per_subreddit} posts from r/{subreddit_name} (hot posts)...")
-            
+            print(
+                f"Fetching top {limit_posts_per_subreddit} posts from r/{subreddit_name} (hot posts)...")
+
             for i, submission in enumerate(subreddit.hot(limit=limit_posts_per_subreddit)):
-                if i >= limit_posts_per_subreddit: # Ensure we don't exceed the limit
+                if i >= limit_posts_per_subreddit:  # Ensure we don't exceed the limit
                     break
                 if submission.stickied:
-                    continue # Skip pinned posts
+                    continue  # Skip pinned posts
 
                 # Collect post title and body
                 post_text = f"Title: {submission.title}\n"
@@ -206,29 +231,36 @@ def fetch_reddit_market_pulse(ticker, limit_posts_per_subreddit=15, limit_commen
                 comments_added = []
                 try:
                     # Replace_more loads more comments, limit=0 loads top-level comments
-                    submission.comments.replace_more(limit=0) 
+                    submission.comments.replace_more(limit=0)
                     # Use a list comprehension and slice to get top N comments
                     for k, top_comment in enumerate(submission.comments.list()):
                         if k >= limit_comments_per_post:
                             break
-                        if hasattr(top_comment, 'body') and top_comment.body.strip(): # Ensure body exists and isn't empty
-                            comments_added.append(f"Comment: {top_comment.body}")
+                        # Ensure body exists and isn't empty
+                        if hasattr(top_comment, 'body') and top_comment.body.strip():
+                            comments_added.append(
+                                f"Comment: {top_comment.body}")
                 except Exception as comment_err:
-                    print(f"  Warning: Could not fetch comments for post {submission.id}: {comment_err}")
+                    print(
+                        f"  Warning: Could not fetch comments for post {submission.id}: {comment_err}")
 
                 if comments_added:
                     post_text += "\n".join(comments_added) + "\n"
-                
-                reddit_content_for_ai.append(post_text)
-                time.sleep(0.1) # Small delay to be respectful of Reddit API limits
 
-        print(f"Reddit Market Pulse: Fetched {len(reddit_content_for_ai)} pieces of content for market pulse.")
+                reddit_content_for_ai.append(post_text)
+                # Small delay to be respectful of Reddit API limits
+                time.sleep(0.1)
+
+        print(
+            f"Reddit Market Pulse: Fetched {len(reddit_content_for_ai)} pieces of content for market pulse.")
         return reddit_content_for_ai
     except Exception as e:
-        print(f"Reddit Market Pulse: Error fetching Reddit data: {e}. Check API limits or credentials.")
+        print(
+            f"Reddit Market Pulse: Error fetching Reddit data: {e}. Check API limits or credentials.")
         return []
 
 # --- Charting Functions ---
+
 
 def create_candlestick_chart(df_hist, ticker):
     """Creates an interactive candlestick chart."""
@@ -248,6 +280,7 @@ def create_candlestick_chart(df_hist, ticker):
     )
     return fig
 
+
 def create_financial_ratios_chart(df_ratios, ticker):
     """Creates a chart for historical financial ratios."""
     if df_ratios.empty:
@@ -260,20 +293,24 @@ def create_financial_ratios_chart(df_ratios, ticker):
 
     fig = go.Figure()
     for col in df_ratios.columns:
-        fig.add_trace(go.Scatter(x=df_ratios.index.astype(str), y=df_ratios[col], mode='lines+markers', name=col))
+        fig.add_trace(go.Scatter(x=df_ratios.index.astype(str),
+                      y=df_ratios[col], mode='lines+markers', name=col))
 
     fig.update_layout(
         title=f'{ticker} Key Historical Ratios',
         xaxis_title='Fiscal Year',
-        yaxis_title='Value (e.g., %)', # Changed to generic "Value" as some ratios aren't percentages
+        # Changed to generic "Value" as some ratios aren't percentages
+        yaxis_title='Value (e.g., %)',
         height=500
     )
     return fig
 
+
 def create_price_gauge_chart(current_price, target_price, ticker):
     """Creates a gauge chart for current price vs. target price."""
     # Ensure a reasonable range for the gauge
-    gauge_min_val = min(current_price, target_price) * 0.9 if min(current_price, target_price) * 0.9 > 0 else 0
+    gauge_min_val = min(current_price, target_price) * \
+        0.9 if min(current_price, target_price) * 0.9 > 0 else 0
     gauge_max_val = max(current_price, target_price) * 1.1
 
     fig = go.Figure(go.Indicator(
@@ -285,9 +322,12 @@ def create_price_gauge_chart(current_price, target_price, ticker):
             'axis': {'range': [gauge_min_val, gauge_max_val], 'tickwidth': 1, 'tickcolor': "darkblue"},
             'bar': {'color': "darkblue"},
             'steps': [
-                {'range': [gauge_min_val, target_price * 0.95], 'color': "lightcoral", 'name': 'Below Target'},
-                {'range': [target_price * 0.95, target_price * 1.05], 'color': "lightgreen", 'name': 'Near Target'},
-                {'range': [target_price * 1.05, gauge_max_val], 'color': "lightblue", 'name': 'Above Target'}
+                {'range': [gauge_min_val, target_price * 0.95],
+                    'color': "lightcoral", 'name': 'Below Target'},
+                {'range': [target_price * 0.95, target_price * 1.05],
+                    'color': "lightgreen", 'name': 'Near Target'},
+                {'range': [target_price * 1.05, gauge_max_val],
+                    'color': "lightblue", 'name': 'Above Target'}
             ],
             'threshold': {
                 'line': {'color': "red", 'width': 4},
@@ -326,8 +366,10 @@ def ai_news_analysis(news_headlines):
         print("AI Analysis: Received response from Gemini.")
         return response.text
     except Exception as e:
-        print(f"AI Analysis: Error with Gemini news analysis: {e}. Check Gemini API key or rate limits.")
+        print(
+            f"AI Analysis: Error with Gemini news analysis: {e}. Check Gemini API key or rate limits.")
         return f"AI news analysis failed: {e}"
+
 
 def ai_financial_analysis(stock_info, df_ratios):
     """Uses Gemini to analyze financial data and company overview."""
@@ -341,7 +383,8 @@ def ai_financial_analysis(stock_info, df_ratios):
     eps = stock_info.get('trailingEps')
     sector = stock_info.get('sector')
     industry = stock_info.get('industry')
-    summary = stock_info.get('longBusinessSummary', 'No business summary available.')
+    summary = stock_info.get('longBusinessSummary',
+                             'No business summary available.')
 
     financial_data_str = f"""
     P/E Ratio: {pe_ratio if pe_ratio else 'N/A'}
@@ -371,8 +414,10 @@ def ai_financial_analysis(stock_info, df_ratios):
         print("AI Analysis: Received response from Gemini.")
         return response.text
     except Exception as e:
-        print(f"AI Analysis: Error with Gemini financial analysis: {e}. Check Gemini API key or rate limits.")
+        print(
+            f"AI Analysis: Error with Gemini financial analysis: {e}. Check Gemini API key or rate limits.")
         return f"AI financial analysis failed: {e}"
+
 
 def ai_buffett_framework_analysis(stock_info):
     """Uses Gemini to assess a stock based on Warren Buffett's investment framework."""
@@ -381,9 +426,10 @@ def ai_buffett_framework_analysis(stock_info):
         return "AI Buffett framework analysis unavailable due to API configuration issues."
 
     pe_ratio = stock_info.get('trailingPE')
-    business_summary = stock_info.get('longBusinessSummary', 'No business summary available.')
+    business_summary = stock_info.get(
+        'longBusinessSummary', 'No business summary available.')
     eps = stock_info.get('trailingEps')
-    
+
     prompt = f"""
     Assess the following stock based on Warren Buffett's investment framework. Focus on these aspects:
     1.  **Understandable Business:** Is the business easy to comprehend?
@@ -402,8 +448,10 @@ def ai_buffett_framework_analysis(stock_info):
         print("AI Analysis: Received response from Gemini for Buffett analysis.")
         return response.text
     except Exception as e:
-        print(f"AI Analysis: Error with Gemini Buffett analysis: {e}. Check Gemini API key or rate limits.")
+        print(
+            f"AI Analysis: Error with Gemini Buffett analysis: {e}. Check Gemini API key or rate limits.")
         return f"AI Buffett framework analysis failed: {e}"
+
 
 def ai_reddit_market_pulse_analysis(reddit_content):
     """Uses Gemini to analyze Reddit content for market pulse."""
@@ -441,7 +489,8 @@ def ai_reddit_market_pulse_analysis(reddit_content):
         print("AI Analysis: Received response from Gemini for Reddit market pulse.")
         return response.text
     except Exception as e:
-        print(f"AI Analysis: Error with Gemini Reddit analysis: {e}. Check Gemini API key or rate limits.")
+        print(
+            f"AI Analysis: Error with Gemini Reddit analysis: {e}. Check Gemini API key or rate limits.")
         return f"AI Reddit market pulse analysis failed: {e}"
 
 
@@ -453,10 +502,11 @@ def perform_comprehensive_analysis(ticker, target_price):
     and generates chart figures.
     Returns a dictionary of results for the Streamlit app.
     """
-    print(f"\n--- Initiating comprehensive analysis for {ticker} with target price {target_price} ---")
+    print(
+        f"\n--- Initiating comprehensive analysis for {ticker} with target price {target_price} ---")
 
     results = {}
-    
+
     # 1. Fetch Data
     stock_info, df_hist = fetch_yfinance_data(ticker)
     if stock_info is None or df_hist is None or df_hist.empty:
@@ -490,38 +540,44 @@ def perform_comprehensive_analysis(ticker, target_price):
     results['ai_news_analysis'] = ai_news_analysis(news_headlines)
 
     print("--- Starting AI-Powered Financial Data Analysis ---")
-    results['ai_financial_analysis'] = ai_financial_analysis(stock_info, df_ratios)
+    results['ai_financial_analysis'] = ai_financial_analysis(
+        stock_info, df_ratios)
 
     print("--- Starting AI-Powered Warren Buffett Framework Analysis ---")
     results['ai_buffett_analysis'] = ai_buffett_framework_analysis(stock_info)
 
     print("--- Starting AI-Powered Reddit Market Pulse Analysis ---")
-    results['ai_reddit_market_pulse'] = ai_reddit_market_pulse_analysis(reddit_content)
+    results['ai_reddit_market_pulse'] = ai_reddit_market_pulse_analysis(
+        reddit_content)
 
     # 4. Basic Valuation Insight
     results['basic_valuation_insight'] = {
         "Your Target Price": f"USD{target_price:.2f}",
         "Current Price": f"USD{current_price:.2f}",
-        "Insight": "Current price is **BELOW** your target price. This might be a potential opportunity based on your target." if current_price < target_price else \
-                   "Current price is **ABOVE** your target price. Consider if it's overvalued for your strategy." if current_price > target_price else \
+        "Insight": "Current price is **BELOW** your target price. This might be a potential opportunity based on your target." if current_price < target_price else
+                   "Current price is **ABOVE** your target price. Consider if it's overvalued for your strategy." if current_price > target_price else
                    "Current price is **AT** your target price."
     }
 
     print("\n--- Comprehensive analysis complete. ---")
     return results
 
+
 # This part is for standalone testing if you run stock_insight_core.py directly
 if __name__ == "__main__":
     print("--- Running stock_insight_core.py in standalone test mode ---")
-    
-    test_ticker = input("Enter the stock ticker symbol for testing (e.g., GOOGL, AAPL, RELIANCE.NS): ").upper()
+
+    test_ticker = input(
+        "Enter the stock ticker symbol for testing (e.g., GOOGL, AAPL, RELIANCE.NS): ").upper()
     try:
-        test_target_price = float(input(f"Enter a test target price for {test_ticker} (e.g., 180.00): "))
+        test_target_price = float(
+            input(f"Enter a test target price for {test_ticker} (e.g., 180.00): "))
     except ValueError:
         print("Invalid price entered. Using default target of 200.00.")
         test_target_price = 200.00
 
-    analysis_results = perform_comprehensive_analysis(test_ticker, test_target_price)
+    analysis_results = perform_comprehensive_analysis(
+        test_ticker, test_target_price)
 
     # Print full results for standalone mode
     print("\n===== FULL ANALYSIS RESULTS (Standalone Test) =====")
@@ -530,10 +586,11 @@ if __name__ == "__main__":
     else:
         for key, value in analysis_results.items():
             if key == 'charts':
-                print(f"--- Generated Chart Figures (will be interactive in Streamlit) ---")
+                print(
+                    f"--- Generated Chart Figures (will be interactive in Streamlit) ---")
                 print("Charts are Plotly Figure objects, displayable in a web app.")
                 continue
-            
+
             print(f"\n--- {key.replace('_', ' ').title()} ---")
             if isinstance(value, dict):
                 for sub_key, sub_value in value.items():
